@@ -63,6 +63,10 @@ def process_packet(packet, args):
         eth_length = 14
         eth_header = packet[:eth_length]
         eth = struct.unpack('!6s6sH', eth_header)
+        # The unpack already converted the ethertype to host order, so
+        # this second ntohs turns 0x0800 into 8, which is why the IPv4
+        # test below compares against 8. It works, but only as a pair:
+        # removing the ntohs as a cleanup would silently break the test.
         eth_protocol = socket.ntohs(eth[2])
 
         # IP Header (minimum 20 bytes)
@@ -80,6 +84,10 @@ def process_packet(packet, args):
             d_addr = socket.inet_ntoa(iph[9])
 
             # TCP Packet
+            # Nothing before this point handles a VLAN tag: an 802.1Q
+            # frame carries ethertype 0x8100 and four extra bytes, so
+            # it fails the IPv4 test above and is dropped unseen. On a
+            # trunk port this detector is blind by construction.
             if protocol == 6:
                 t = iph_length + eth_length
                 tcp_header = packet[t:t+20]
@@ -104,6 +112,10 @@ def process_packet(packet, args):
                     return
 
                 # Check for RST flag
+                # Every matching RST logs its own warning. I keep no
+                # counter, no per connection state, and no dedup, so a
+                # reset storm becomes a log flood at the same rate, and
+                # "abnormal" is left for whoever reads the log to judge.
                 if is_rst_packet(tcp_header):
                     logging.warning(f"Detected TCP RST packet: Source IP: {s_addr}, Destination IP: {d_addr}, Source Port: {src_port}, Destination Port: {dst_port}")
                     if args.verbose:
