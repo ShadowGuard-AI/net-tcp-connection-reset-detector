@@ -21,7 +21,7 @@ def setup_argparse():
     parser.add_argument("--dst_port", type=int, help="Filter by destination port (optional).")
     parser.add_argument("--promiscuous", action="store_true", help="Enable promiscuous mode (requires root).")
     parser.add_argument("--log_file", type=str, help="Path to log file (optional).")
-    parser.add_argument("--verbose", action="store_true", help="Enable verbose logging.")
+    parser.add_argument("--verbose", action="store_true", help="Enable verbose logging: sets the DEBUG log level and logs packet headers with the payload length only, never the payload itself.")
 
     return parser.parse_args()
 
@@ -107,7 +107,8 @@ def process_packet(packet, args):
                 if is_rst_packet(tcp_header):
                     logging.warning(f"Detected TCP RST packet: Source IP: {s_addr}, Destination IP: {d_addr}, Source Port: {src_port}, Destination Port: {dst_port}")
                     if args.verbose:
-                        logging.info(f"Full Packet: {packet}")
+                        payload_length = max(data_size, 0)
+                        logging.info(f"Packet headers: Source IP: {s_addr}, Destination IP: {d_addr}, Source Port: {src_port}, Destination Port: {dst_port}, Payload length: {payload_length} bytes")
     except struct.error as e:
         logging.error(f"Struct error during packet processing: {e}. Packet might be incomplete.")
     except socket.error as e:
@@ -121,6 +122,9 @@ def main():
     Main function to capture and process network packets.
     """
     args = setup_argparse()
+
+    if args.verbose:
+        logging.getLogger().setLevel(logging.DEBUG)
 
     if args.log_file:
         file_handler = logging.FileHandler(args.log_file)
@@ -138,7 +142,15 @@ def main():
 
         # Enable promiscuous mode (if specified)
         if args.promiscuous:
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_PROMISC, 1)
+            # Linux packet sockets set promiscuous mode with
+            # PACKET_ADD_MEMBERSHIP and a packet_mreq naming the
+            # interface index and PACKET_MRN_PROMISC. The socket
+            # module does not expose these constants, so the Linux
+            # values are used directly: SOL_PACKET 263,
+            # PACKET_ADD_MEMBERSHIP 1, PACKET_MRN_PROMISC 1.
+            if_index = socket.if_nametoindex(args.interface)
+            mreq = struct.pack('iHH8s', if_index, 1, 0, b'\x00' * 8)
+            sock.setsockopt(263, 1, mreq)
             logging.info("Promiscuous mode enabled.")
 
         logging.info(f"Listening on interface {args.interface}...")
